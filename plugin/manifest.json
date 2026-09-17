@@ -1,10 +1,12 @@
 {
   "name": "figma-bridge",
-  "id": "figma-bridge-dev",
   "api": "1.0.0",
-  "main": "code.js",
+  "main": "dist/code.js",
+  "ui": "dist/ui.html",
   "editorType": ["figma"],
+  "documentAccess": "dynamic-page",
   "networkAccess": {
-    "allowedDomains": ["http://127.0.0.1:4395", "ws://127.0.0.1:4395"]
+    "allowedDomains": ["ws://localhost:4395", "http://localhost:4395"],
+    "reasoning": "The plugin opens a WebSocket to a local relay on port 4395 that bridges the Figma Plugin API to a local MCP server. No external hosts are contacted."
   }
 }

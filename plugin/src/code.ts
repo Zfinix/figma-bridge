@@ -1,29 +1,37 @@
 /**
- * figma-bridge plugin.
+ * figma-bridge plugin main sandbox.
  *
- * Runs inside the Figma desktop app. The WebSocket lives in the UI iframe
- * (ui.html) because Figma's main plugin sandbox has no WebSocket. Requests
- * come in from the iframe over postMessage, run here against the Plugin API,
- * and the response goes back the same way.
+ * Requests arrive from the UI iframe (which owns the WebSocket) over
+ * postMessage, run here against the Plugin API, and the response goes
+ * back the same way.
  */
+declare function btoa(input: string): string;
 
 figma.showUI(__html__, { width: 240, height: 72, themeColors: true });
 
-figma.ui.onmessage = async (msg) => {
+interface BridgeRequest {
+  source?: string;
+  type?: string;
+  id?: number;
+  method?: string;
+  params?: Record<string, unknown>;
+}
+
+figma.ui.onmessage = async (msg: BridgeRequest) => {
   if (!msg || msg.source !== "figma-bridge" || msg.type !== "request") return;
   const response = await handle(msg);
   figma.ui.postMessage({ source: "figma-bridge", type: "response", id: msg.id, ...response });
 };
 
-async function handle(msg) {
+async function handle(msg: BridgeRequest) {
   try {
-    return { ok: true, result: await run(msg.method, msg.params ?? {}) };
+    return { ok: true, result: await run(msg.method as string, msg.params ?? {}) };
   } catch (err) {
-    return { ok: false, error: err && err.message ? err.message : String(err) };
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
 }
 
-async function run(method, params) {
+async function run(method: string, params: Record<string, any>): Promise<unknown> {
   switch (method) {
     case "ping":
       return { file: figma.root.name, page: figma.currentPage.name };
@@ -49,9 +57,9 @@ async function run(method, params) {
     case "clone_node":
       return cloneNode(params);
     case "set_fills":
-      return setFills(params);
+      return paint(params, "fills");
     case "set_strokes":
-      return setStrokes(params);
+      return paint(params, "strokes");
     case "set_effects":
       return setEffects(params);
     case "import_component":
@@ -71,13 +79,13 @@ async function run(method, params) {
 // Methods
 // ---------------------------------------------------------------------------
 
-async function execute(code) {
+async function execute(code: string) {
   const fn = new Function("figma", `"use strict";\nreturn (async () => {\n${code}\n})();`);
   const value = await fn(figma);
   return { value: serialize(value) };
 }
 
-function getTree(params) {
+function getTree(params: Record<string, any>) {
   const maxDepth = Number.isFinite(params.maxDepth) ? params.maxDepth : 6;
   const filter = params.filter ? new RegExp(params.filter) : null;
   const root = params.nodeId ? figma.getNodeById(params.nodeId) : figma.root;
@@ -85,85 +93,61 @@ function getTree(params) {
   return summarize(root, 0, maxDepth, filter);
 }
 
-function summarize(node, depth, maxDepth, filter) {
-  const out = {
-    id: node.id,
-    name: node.name,
-    type: node.type,
-  };
-  if (node.children && depth < maxDepth) {
-    out.children = node.children
-      .filter((c) => !filter || filter.test(c.type))
-      .map((c) => summarize(c, depth + 1, maxDepth, filter));
-  } else if (node.children) {
-    out.truncated = true;
-    out.childCount = node.children.length;
+function summarize(node: BaseNode, depth: number, maxDepth: number, filter: RegExp | null): any {
+  const out: any = { id: node.id, name: node.name, type: node.type };
+  if ("children" in node) {
+    if (depth < maxDepth) {
+      out.children = node.children
+        .filter((c) => !filter || filter.test(c.type))
+        .map((c) => summarize(c, depth + 1, maxDepth, filter));
+    } else {
+      out.truncated = true;
+      out.childCount = node.children.length;
+    }
   }
   return out;
 }
 
-function getNode(nodeId) {
+function getNode(nodeId: string) {
   const node = figma.getNodeById(nodeId);
   if (!node) throw new Error(`no node ${nodeId}`);
-  const out = {
-    id: node.id,
-    name: node.name,
-    type: node.type,
-  };
-  for (const key of [
-    "fills",
-    "strokes",
-    "effects",
-    "constraints",
-    "layoutMode",
-    "primaryAxisAlignItems",
-    "counterAxisAlignItems",
-    "itemSpacing",
-    "paddingLeft",
-    "paddingRight",
-    "paddingTop",
-    "paddingBottom",
-    "cornerRadius",
-    "opacity",
-    "visible",
-    "characters",
-    "fontSize",
-    "fontName",
-    "textAlignHorizontal",
-    "textAlignVertical",
-    "lineHeight",
-    "letterSpacing",
-  ]) {
+  const out: any = { id: node.id, name: node.name, type: node.type };
+  const keys = [
+    "fills", "strokes", "effects", "constraints", "layoutMode",
+    "primaryAxisAlignItems", "counterAxisAlignItems", "itemSpacing",
+    "paddingLeft", "paddingRight", "paddingTop", "paddingBottom",
+    "cornerRadius", "opacity", "visible", "characters", "fontSize",
+    "fontName", "textAlignHorizontal", "textAlignVertical", "lineHeight", "letterSpacing",
+  ];
+  for (const key of keys) {
     try {
-      const v = node[key];
+      const v = (node as any)[key];
       if (v !== undefined) out[key] = serialize(v);
     } catch {}
   }
   try {
-    out.absoluteTransform = node.absoluteTransform;
+    out.absoluteTransform = (node as any).absoluteTransform;
   } catch {}
   try {
-    out.absoluteBoundingBox = node.absoluteBoundingBox;
+    out.absoluteBoundingBox = (node as any).absoluteBoundingBox;
   } catch {}
-  if (node.children) {
+  if ("children" in node) {
     out.children = node.children.map((c) => ({ id: c.id, name: c.name, type: c.type }));
   }
   return out;
 }
 
-async function screenshot(params) {
-  let node = figma.currentPage;
-  let note = null;
+async function screenshot(params: Record<string, any>) {
+  let node: PageNode | SceneNode = figma.currentPage;
+  let note: string | null = null;
   if (params.nodeId) {
     const n = figma.getNodeById(params.nodeId);
     if (!n) throw new Error(`no node ${params.nodeId}`);
-    node = n;
+    node = n as SceneNode;
   } else if (params.viewport) {
-    // Export the visible area by rendering the page's visible nodes region.
     const nodes = figma.currentPage.children.filter((c) => c.visible);
     if (nodes.length === 0) throw new Error("page is empty");
     note = "viewport export approximated by rendering all top-level nodes";
-    node = figma.currentPage;
   }
   const format = params.format === "jpg" ? "JPG" : "PNG";
   const bytes = await node.exportAsync({
@@ -181,7 +165,7 @@ async function screenshot(params) {
 // Write surface
 // ---------------------------------------------------------------------------
 
-function createFrame(params) {
+function createFrame(params: Record<string, any>) {
   const parent = params.parentId ? figma.getNodeById(params.parentId) : figma.currentPage;
   if (!parent) throw new Error(`no node ${params.parentId}`);
   const frame = figma.createFrame();
@@ -201,11 +185,11 @@ function createFrame(params) {
     if (params.primaryAxisAlignItems) frame.primaryAxisAlignItems = params.primaryAxisAlignItems;
     if (params.counterAxisAlignItems) frame.counterAxisAlignItems = params.counterAxisAlignItems;
   }
-  parent.appendChild(frame);
+  (parent as any).appendChild(frame);
   return { id: frame.id, name: frame.name };
 }
 
-function createText(params) {
+function createText(params: Record<string, any>) {
   const parent = params.parentId ? figma.getNodeById(params.parentId) : figma.currentPage;
   if (!parent) throw new Error(`no node ${params.parentId}`);
   const text = figma.createText();
@@ -221,22 +205,22 @@ function createText(params) {
   }
   if (params.x !== undefined) text.x = Number(params.x);
   if (params.y !== undefined) text.y = Number(params.y);
-  parent.appendChild(text);
+  (parent as any).appendChild(text);
   return { id: text.id, name: text.name };
 }
 
-function setProperties(params) {
+function setProperties(params: Record<string, any>) {
   const node = figma.getNodeById(params.nodeId);
   if (!node) throw new Error(`no node ${params.nodeId}`);
-  const applied = [];
+  const applied: string[] = [];
   for (const [key, value] of Object.entries(params.properties ?? {})) {
-    node[key] = value;
+    (node as any)[key] = value;
     applied.push(key);
   }
   return { id: node.id, applied };
 }
 
-function deleteNode(nodeId) {
+function deleteNode(nodeId: string) {
   const node = figma.getNodeById(nodeId);
   if (!node) throw new Error(`no node ${nodeId}`);
   const type = node.type;
@@ -244,48 +228,40 @@ function deleteNode(nodeId) {
   return { removed: nodeId, type };
 }
 
-function cloneNode(params) {
+function cloneNode(params: Record<string, any>) {
   const node = figma.getNodeById(params.nodeId);
   if (!node) throw new Error(`no node ${params.nodeId}`);
-  const copy = node.clone();
+  const copy = (node as SceneNode).clone();
   const parent = params.parentId ? figma.getNodeById(params.parentId) : node.parent;
   if (!parent) throw new Error(`no node ${params.parentId}`);
-  parent.appendChild(copy);
+  (parent as any).appendChild(copy);
   if (params.x !== undefined) copy.x = Number(params.x);
   if (params.y !== undefined) copy.y = Number(params.y);
   return { id: copy.id, name: copy.name };
 }
 
-function setFills(params) {
-  return paint(params, "fills");
-}
-
-function setStrokes(params) {
-  return paint(params, "strokes");
-}
-
-function setEffects(params) {
+function setEffects(params: Record<string, any>) {
   const node = figma.getNodeById(params.nodeId);
   if (!node) throw new Error(`no node ${params.nodeId}`);
-  node.effects = params.effects;
-  return { id: node.id, effects: serialize(node.effects) };
+  (node as any).effects = params.effects;
+  return { id: node.id, effects: serialize((node as any).effects) };
 }
 
-function paint(params, prop) {
+function paint(params: Record<string, any>, prop: "fills" | "strokes") {
   const node = figma.getNodeById(params.nodeId);
   if (!node) throw new Error(`no node ${params.nodeId}`);
-  node[prop] = params[prop];
-  return { id: node.id, [prop]: serialize(node[prop]) };
+  (node as any)[prop] = params[prop];
+  return { id: node.id, [prop]: serialize((node as any)[prop]) };
 }
 
-async function importComponent(params) {
+async function importComponent(params: Record<string, any>) {
   const key = params.componentKey;
   if (!key) throw new Error("componentKey is required");
-  const component = await figma.importComponentAsync({ key });
+  const component = await figma.importComponentByKeyAsync(key);
   const instance = component.createInstance();
   const parent = params.parentId ? figma.getNodeById(params.parentId) : figma.currentPage;
   if (!parent) throw new Error(`no node ${params.parentId}`);
-  parent.appendChild(instance);
+  (parent as any).appendChild(instance);
   if (params.x !== undefined) instance.x = Number(params.x);
   if (params.y !== undefined) instance.y = Number(params.y);
   return { id: instance.id, name: instance.name, componentKey: key };
@@ -297,19 +273,15 @@ async function importComponent(params) {
 
 function getSelection() {
   return {
-    nodes: figma.currentPage.selection.map((n) => ({
-      id: n.id,
-      name: n.name,
-      type: n.type,
-    })),
+    nodes: figma.currentPage.selection.map((n) => ({ id: n.id, name: n.name, type: n.type })),
   };
 }
 
-function setSelection(nodeIds) {
+function setSelection(nodeIds: string[]) {
   const nodes = (nodeIds ?? []).map((id) => {
     const n = figma.getNodeById(id);
     if (!n) throw new Error(`no node ${id}`);
-    return n;
+    return n as SceneNode;
   });
   figma.currentPage.selection = nodes;
   if (nodes.length > 0) {
@@ -318,16 +290,18 @@ function setSelection(nodeIds) {
   return { selected: nodes.map((n) => n.id) };
 }
 
-async function exportNode(params) {
+async function exportNode(params: Record<string, any>) {
   const node = figma.getNodeById(params.nodeId);
   if (!node) throw new Error(`no node ${params.nodeId}`);
-  const formatMap = { png: "PNG", jpg: "JPG", svg: "SVG", pdf: "PDF" };
+  const formatMap: Record<string, "PNG" | "JPG" | "SVG" | "PDF"> = {
+    png: "PNG", jpg: "JPG", svg: "SVG", pdf: "PDF",
+  };
   const format = formatMap[params.format] ?? "PNG";
-  const settings = { format };
-  if (format === "PNG" || format === "JPG") {
-    settings.constraint = { type: "SCALE", value: params.scale ?? 2 };
-  }
-  const bytes = await node.exportAsync(settings);
+  const settings: ExportSettings =
+    format === "PNG" || format === "JPG"
+      ? { format, constraint: { type: "SCALE", value: params.scale ?? 2 } }
+      : { format };
+  const bytes = await (node as SceneNode | PageNode).exportAsync(settings);
   return {
     data: arrayBufferToBase64(bytes),
     mimeType:
@@ -345,22 +319,21 @@ async function exportNode(params) {
 // Serialization
 // ---------------------------------------------------------------------------
 
-function serialize(value, depth = 0) {
+function serialize(value: unknown, depth = 0): unknown {
   if (value === null) return null;
   if (value === undefined) return undefined;
   const t = typeof value;
-  if (t === "string" || t === "boolean") return value;
-  if (t === "number") return value;
+  if (t === "string" || t === "boolean" || t === "number") return value;
   if (Array.isArray(value)) {
     if (depth > 8) return "[...]";
     return value.map((v) => serialize(v, depth + 1));
   }
   if (t === "object") {
     if (depth > 8) return "{...}";
-    const out = {};
-    for (const k of Object.keys(value)) {
+    const out: Record<string, unknown> = {};
+    for (const k of Object.keys(value as object)) {
       try {
-        out[k] = serialize(value[k], depth + 1);
+        out[k] = serialize((value as Record<string, unknown>)[k], depth + 1);
       } catch {
         out[k] = "<unserializable>";
       }
@@ -370,7 +343,7 @@ function serialize(value, depth = 0) {
   return String(value);
 }
 
-function arrayBufferToBase64(buffer) {
+function arrayBufferToBase64(buffer: ArrayBuffer | Uint8Array) {
   const bytes = new Uint8Array(buffer);
   let binary = "";
   const chunk = 0x8000;
@@ -379,5 +352,3 @@ function arrayBufferToBase64(buffer) {
   }
   return btoa(binary);
 }
-
-connect();

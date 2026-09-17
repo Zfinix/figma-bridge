@@ -1,0 +1,12 @@
+{
+  "name": "figma-bridge-plugin",
+  "private": true,
+  "scripts": {
+    "build": "bun build src/code.ts --format=iife --outfile=dist/code.js && bun build src/ui.ts --format=iife --outfile=dist/ui.js && cp src/ui.html dist/ui.html",
+    "typecheck": "tsc -p tsconfig.code.json && tsc -p tsconfig.ui.json"
+  },
+  "devDependencies": {
+    "@figma/plugin-typings": "latest",
+    "typescript": "^7.0.2"
+  }
+}
