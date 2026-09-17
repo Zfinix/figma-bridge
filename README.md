@@ -41,3 +41,14 @@ plugin runs inside Figma and executes what the server forwards.
 ```
 bun server/smoke.ts
 ```
+
+## Plugin build
+
+Sources are TypeScript in `plugin/src/`. Figma runs the compiled output in `plugin/dist/`.
+
+    cd plugin
+    bun install
+    bun run build       # bundle code.ts and ui.ts to dist/
+    bun run typecheck   # tsc against @figma/plugin-typings
+
+Re-import `plugin/manifest.json` in Figma after changing paths (Plugins > Development > Import plugin from manifest).
