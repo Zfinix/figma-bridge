@@ -11,8 +11,10 @@
 
 const PORT = 4395;
 const HOST = "127.0.0.1";
+const REPLACED_CODE = 4001;
 
 let pluginSocket: any = null;
+let lastSelection: { nodes: any[]; at: number } | null = null;
 
 type Client = { ws: any };
 const clients = new Set<Client>();
@@ -56,11 +58,12 @@ Bun.serve({
   websocket: {
     open(ws: any) {
       const role = ws.data.role;
+      console.log(`[relay] ${role} connected`);
       if (role === "plugin") {
         // One plugin at a time: a new one replaces the old.
         if (pluginSocket && pluginSocket !== ws) {
           try {
-            pluginSocket.close();
+            pluginSocket.close(REPLACED_CODE, "replaced by a newer plugin window");
           } catch {}
         }
         pluginSocket = ws;
@@ -78,6 +81,14 @@ Bun.serve({
       }
 
       if (role === "plugin") {
+        // Unsolicited push from the plugin: {type:"event", name, nodes}
+        if (msg.type === "event") {
+          if (msg.name === "selectionchange") {
+            lastSelection = { nodes: msg.nodes ?? [], at: Date.now() };
+            for (const c of clients) send(c.ws, { event: "selectionchange", nodes: msg.nodes });
+          }
+          return;
+        }
         // Result of a forwarded call: {id, ok, result?, error?}
         const entry = pending.get(msg.id);
         if (!entry) return;
@@ -112,6 +123,7 @@ Bun.serve({
       send(pluginSocket, { id, method: msg.method, params: msg.params });
     },
     close(ws: any) {
+      console.log(`[relay] ${ws.data.role} disconnected`);
       if (ws.data.role === "plugin") {
         if (pluginSocket === ws) {
           pluginSocket = null;

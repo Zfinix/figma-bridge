@@ -6,19 +6,39 @@
  * back the same way.
  */
 declare function btoa(input: string): string;
+declare function atob(input: string): string;
 
-figma.showUI(__html__, { width: 240, height: 72, themeColors: true });
+figma.showUI(__html__, { visible: false });
+
+// Push selection changes so the relay always knows what the human is looking at.
+function pushSelection() {
+  figma.ui.postMessage({
+    source: "figma-bridge",
+    type: "event",
+    name: "selectionchange",
+    nodes: figma.currentPage.selection.map((n) => ({ id: n.id, name: n.name, type: n.type })),
+  });
+}
+figma.on("selectionchange", pushSelection);
+pushSelection();
 
 interface BridgeRequest {
   source?: string;
   type?: string;
+  text?: string;
+  error?: boolean;
   id?: number;
   method?: string;
   params?: Record<string, unknown>;
 }
 
 figma.ui.onmessage = async (msg: BridgeRequest) => {
-  if (!msg || msg.source !== "figma-bridge" || msg.type !== "request") return;
+  if (!msg || msg.source !== "figma-bridge") return;
+  if (msg.type === "status") {
+    figma.notify(String(msg.text), { error: msg.error });
+    return;
+  }
+  if (msg.type !== "request") return;
   const response = await handle(msg);
   figma.ui.postMessage({ source: "figma-bridge", type: "response", id: msg.id, ...response });
 };
@@ -39,6 +59,8 @@ async function run(method: string, params: Record<string, any>): Promise<unknown
       return execute(params.code);
     case "get_tree":
       return getTree(params);
+    case "set_image_fill":
+      return setImageFill(params);
     case "get_node":
       return getNode(params.nodeId);
     case "get_screenshot":
@@ -85,16 +107,26 @@ async function execute(code: string) {
   return { value: serialize(value) };
 }
 
-function getTree(params: Record<string, any>) {
+async function getTree(params: Record<string, any>) {
   const maxDepth = Number.isFinite(params.maxDepth) ? params.maxDepth : 6;
   const filter = params.filter ? new RegExp(params.filter) : null;
-  const root = params.nodeId ? figma.getNodeById(params.nodeId) : figma.root;
+  if (!params.nodeId) await figma.loadAllPagesAsync();
+  const root = params.nodeId ? await figma.getNodeByIdAsync(params.nodeId) : figma.root;
   if (!root) throw new Error(`no node ${params.nodeId}`);
   return summarize(root, 0, maxDepth, filter);
 }
 
 function summarize(node: BaseNode, depth: number, maxDepth: number, filter: RegExp | null): any {
   const out: any = { id: node.id, name: node.name, type: node.type };
+  if (node.type === "TEXT") {
+    const chars = (node as TextNode).characters;
+    out.characters = chars.length > 120 ? chars.slice(0, 120) + "…" : chars;
+  }
+  if ("width" in node) {
+    out.width = Math.round((node as any).width);
+    out.height = Math.round((node as any).height);
+  }
+  if ("visible" in node && !(node as any).visible) out.visible = false;
   if ("children" in node) {
     if (depth < maxDepth) {
       out.children = node.children
@@ -108,8 +140,8 @@ function summarize(node: BaseNode, depth: number, maxDepth: number, filter: RegE
   return out;
 }
 
-function getNode(nodeId: string) {
-  const node = figma.getNodeById(nodeId);
+async function getNode(nodeId: string) {
+  const node = await figma.getNodeByIdAsync(nodeId);
   if (!node) throw new Error(`no node ${nodeId}`);
   const out: any = { id: node.id, name: node.name, type: node.type };
   const keys = [
@@ -141,7 +173,7 @@ async function screenshot(params: Record<string, any>) {
   let node: PageNode | SceneNode = figma.currentPage;
   let note: string | null = null;
   if (params.nodeId) {
-    const n = figma.getNodeById(params.nodeId);
+    const n = await figma.getNodeByIdAsync(params.nodeId);
     if (!n) throw new Error(`no node ${params.nodeId}`);
     node = n as SceneNode;
   } else if (params.viewport) {
@@ -165,8 +197,8 @@ async function screenshot(params: Record<string, any>) {
 // Write surface
 // ---------------------------------------------------------------------------
 
-function createFrame(params: Record<string, any>) {
-  const parent = params.parentId ? figma.getNodeById(params.parentId) : figma.currentPage;
+async function createFrame(params: Record<string, any>) {
+  const parent = params.parentId ? await figma.getNodeByIdAsync(params.parentId) : figma.currentPage;
   if (!parent) throw new Error(`no node ${params.parentId}`);
   const frame = figma.createFrame();
   frame.name = params.name ?? "Frame";
@@ -189,8 +221,8 @@ function createFrame(params: Record<string, any>) {
   return { id: frame.id, name: frame.name };
 }
 
-function createText(params: Record<string, any>) {
-  const parent = params.parentId ? figma.getNodeById(params.parentId) : figma.currentPage;
+async function createText(params: Record<string, any>) {
+  const parent = params.parentId ? await figma.getNodeByIdAsync(params.parentId) : figma.currentPage;
   if (!parent) throw new Error(`no node ${params.parentId}`);
   const text = figma.createText();
   text.name = params.name ?? "Text";
@@ -209,8 +241,8 @@ function createText(params: Record<string, any>) {
   return { id: text.id, name: text.name };
 }
 
-function setProperties(params: Record<string, any>) {
-  const node = figma.getNodeById(params.nodeId);
+async function setProperties(params: Record<string, any>) {
+  const node = await figma.getNodeByIdAsync(params.nodeId);
   if (!node) throw new Error(`no node ${params.nodeId}`);
   const applied: string[] = [];
   for (const [key, value] of Object.entries(params.properties ?? {})) {
@@ -220,19 +252,19 @@ function setProperties(params: Record<string, any>) {
   return { id: node.id, applied };
 }
 
-function deleteNode(nodeId: string) {
-  const node = figma.getNodeById(nodeId);
+async function deleteNode(nodeId: string) {
+  const node = await figma.getNodeByIdAsync(nodeId);
   if (!node) throw new Error(`no node ${nodeId}`);
   const type = node.type;
   node.remove();
   return { removed: nodeId, type };
 }
 
-function cloneNode(params: Record<string, any>) {
-  const node = figma.getNodeById(params.nodeId);
+async function cloneNode(params: Record<string, any>) {
+  const node = await figma.getNodeByIdAsync(params.nodeId);
   if (!node) throw new Error(`no node ${params.nodeId}`);
   const copy = (node as SceneNode).clone();
-  const parent = params.parentId ? figma.getNodeById(params.parentId) : node.parent;
+  const parent = params.parentId ? await figma.getNodeByIdAsync(params.parentId) : node.parent;
   if (!parent) throw new Error(`no node ${params.parentId}`);
   (parent as any).appendChild(copy);
   if (params.x !== undefined) copy.x = Number(params.x);
@@ -240,15 +272,26 @@ function cloneNode(params: Record<string, any>) {
   return { id: copy.id, name: copy.name };
 }
 
-function setEffects(params: Record<string, any>) {
-  const node = figma.getNodeById(params.nodeId);
+async function setImageFill(params: Record<string, any>) {
+  const node = await figma.getNodeByIdAsync(params.nodeId);
+  if (!node) throw new Error(`no node ${params.nodeId}`);
+  if (!("fills" in node)) throw new Error(`node ${params.nodeId} (${node.type}) has no fills`);
+  const bytes = base64ToBytes(String(params.base64));
+  const image = figma.createImage(bytes);
+  const scaleMode = params.scaleMode ?? "FILL";
+  (node as any).fills = [{ type: "IMAGE", imageHash: image.hash, scaleMode }];
+  return { id: node.id, imageHash: image.hash, scaleMode };
+}
+
+async function setEffects(params: Record<string, any>) {
+  const node = await figma.getNodeByIdAsync(params.nodeId);
   if (!node) throw new Error(`no node ${params.nodeId}`);
   (node as any).effects = params.effects;
   return { id: node.id, effects: serialize((node as any).effects) };
 }
 
-function paint(params: Record<string, any>, prop: "fills" | "strokes") {
-  const node = figma.getNodeById(params.nodeId);
+async function paint(params: Record<string, any>, prop: "fills" | "strokes") {
+  const node = await figma.getNodeByIdAsync(params.nodeId);
   if (!node) throw new Error(`no node ${params.nodeId}`);
   (node as any)[prop] = params[prop];
   return { id: node.id, [prop]: serialize((node as any)[prop]) };
@@ -259,7 +302,7 @@ async function importComponent(params: Record<string, any>) {
   if (!key) throw new Error("componentKey is required");
   const component = await figma.importComponentByKeyAsync(key);
   const instance = component.createInstance();
-  const parent = params.parentId ? figma.getNodeById(params.parentId) : figma.currentPage;
+  const parent = params.parentId ? await figma.getNodeByIdAsync(params.parentId) : figma.currentPage;
   if (!parent) throw new Error(`no node ${params.parentId}`);
   (parent as any).appendChild(instance);
   if (params.x !== undefined) instance.x = Number(params.x);
@@ -277,12 +320,13 @@ function getSelection() {
   };
 }
 
-function setSelection(nodeIds: string[]) {
-  const nodes = (nodeIds ?? []).map((id) => {
-    const n = figma.getNodeById(id);
+async function setSelection(nodeIds: string[]) {
+  const nodes: SceneNode[] = [];
+  for (const id of nodeIds ?? []) {
+    const n = await figma.getNodeByIdAsync(id);
     if (!n) throw new Error(`no node ${id}`);
-    return n as SceneNode;
-  });
+    nodes.push(n as SceneNode);
+  }
   figma.currentPage.selection = nodes;
   if (nodes.length > 0) {
     figma.viewport.scrollAndZoomIntoView(nodes);
@@ -291,7 +335,7 @@ function setSelection(nodeIds: string[]) {
 }
 
 async function exportNode(params: Record<string, any>) {
-  const node = figma.getNodeById(params.nodeId);
+  const node = await figma.getNodeByIdAsync(params.nodeId);
   if (!node) throw new Error(`no node ${params.nodeId}`);
   const formatMap: Record<string, "PNG" | "JPG" | "SVG" | "PDF"> = {
     png: "PNG", jpg: "JPG", svg: "SVG", pdf: "PDF",
@@ -341,6 +385,13 @@ function serialize(value: unknown, depth = 0): unknown {
     return out;
   }
   return String(value);
+}
+
+function base64ToBytes(b64: string): Uint8Array {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
 }
 
 function arrayBufferToBase64(buffer: ArrayBuffer | Uint8Array) {

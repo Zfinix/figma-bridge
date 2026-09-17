@@ -27,6 +27,8 @@ type Pending = {
 let relay: any = null;
 const pending = new Map<number, Pending>();
 let nextCallId = 1;
+let lastSelection: { nodes: any[]; at: number } | null = null;
+const SELECTION_CACHE_MS = 30_000;
 
 function spawnRelay() {
   const script = new URL("./relay.ts", import.meta.url).pathname;
@@ -62,10 +64,14 @@ async function connectRelay(): Promise<void> {
       }
     };
     ws.onmessage = (event) => {
-      let msg: { cid: number; ok: boolean; result?: unknown; error?: string };
+      let msg: any;
       try {
         msg = JSON.parse(String(event.data));
       } catch {
+        return;
+      }
+      if (msg.event === "selectionchange") {
+        lastSelection = { nodes: msg.nodes ?? [], at: Date.now() };
         return;
       }
       const entry = pending.get(msg.cid);
@@ -168,7 +174,7 @@ const TOOLS: Record<string, ToolDef> = {
   },
   get_tree: {
     description:
-      "Read the document node tree: ids, names, types, and layout. Cheaper than execute for orientation. Returns the subtree under node_id (default: document root), capped by max_depth.",
+      "Read the document node tree: ids, names, types, layout, text content (truncated), and sizes. Cheaper than execute for orientation. Returns the subtree under node_id (default: document root), capped by max_depth.",
     inputSchema: {
       type: "object",
       properties: {
@@ -424,9 +430,43 @@ const TOOLS: Record<string, ToolDef> = {
       }).then((r) => text(JSON.stringify(r, null, 2))),
   },
   get_selection: {
-    description: "What the human has selected in Figma right now.",
+    description:
+      "What the human has selected in Figma right now. The plugin pushes selection changes continuously, so this is usually instant from cache.",
     inputSchema: { type: "object", properties: {} },
-    run: () => callPlugin("get_selection", {}).then((r) => text(JSON.stringify(r, null, 2))),
+    run: () => {
+      if (lastSelection && Date.now() - lastSelection.at < SELECTION_CACHE_MS) {
+        return text(JSON.stringify({ nodes: lastSelection.nodes, source: "push" }, null, 2));
+      }
+      return callPlugin("get_selection", {}).then((r) => text(JSON.stringify(r, null, 2)));
+    },
+  },
+  set_image_fill: {
+    description:
+      "Set a node's fill to an image: pass image_url (fetched by the relay) or image_base64. This is how a placeholder rectangle becomes a real screenshot. scale_mode defaults to FILL.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        node_id: { type: "string" },
+        image_url: { type: "string", description: "URL to fetch the image from" },
+        image_base64: { type: "string", description: "Raw image bytes, base64" },
+        scale_mode: { type: "string", enum: ["FILL", "FIT", "CROP", "TILE"] },
+      },
+      required: ["node_id"],
+    },
+    run: async (args: any) => {
+      let base64 = args.image_base64 as string | undefined;
+      if (!base64 && args.image_url) {
+        const res = await fetch(String(args.image_url));
+        if (!res.ok) throw new Error(`image fetch failed: ${res.status} ${res.statusText}`);
+        base64 = Buffer.from(await res.arrayBuffer()).toString("base64");
+      }
+      if (!base64) throw new Error("pass image_url or image_base64");
+      return callPlugin("set_image_fill", {
+        nodeId: args.node_id,
+        base64,
+        scaleMode: args.scale_mode ?? "FILL",
+      }).then((r) => text(JSON.stringify(r, null, 2)));
+    },
   },
   set_selection: {
     description:
@@ -476,20 +516,28 @@ function handle(req: any): Promise<any> | any {
   const { id, method, params } = req;
   if (method === "initialize") {
     return {
-      protocolVersion: params?.protocolVersion ?? "2024-11-05",
-      capabilities: { tools: {} },
-      serverInfo: { name: "figma-bridge", version: "0.1.0" },
+      jsonrpc: "2.0",
+      id,
+      result: {
+        protocolVersion: params?.protocolVersion ?? "2024-11-05",
+        capabilities: { tools: {} },
+        serverInfo: { name: "figma-bridge", version: "0.1.0" },
+      },
     };
   }
   if (method === "notifications/initialized") return undefined;
   if (method === "ping") return { jsonrpc: "2.0", id, result: {} };
   if (method === "tools/list") {
     return {
-      tools: Object.entries(TOOLS).map(([name, t]) => ({
-        name,
-        description: t.description,
-        inputSchema: t.inputSchema,
-      })),
+      jsonrpc: "2.0",
+      id,
+      result: {
+        tools: Object.entries(TOOLS).map(([name, t]) => ({
+          name,
+          description: t.description,
+          inputSchema: t.inputSchema,
+        })),
+      },
     };
   }
   if (method === "tools/call") {

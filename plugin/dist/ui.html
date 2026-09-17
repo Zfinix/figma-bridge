@@ -1,6 +1,91 @@
 <html>
-<body style="margin:0;font:11px -apple-system,sans-serif;background:#1e1e1e;color:#eee;display:flex;align-items:center;height:100vh;">
-<div id="status" style="padding:0 12px;opacity:.8;">connecting&hellip;</div>
-<script src="ui.js"></script>
+<body>
+<script>
+(() => {
+  // src/ui.ts
+  var RELAY_URL = "ws://localhost:4395/plugin";
+  var MAX_BACKOFF_MS = 1e4;
+  var REPLACED_CODE = 4001;
+  var ws = null;
+  var backoff = 500;
+  var lastStatus = "";
+  function setStatus(text, error = false) {
+    if (text === lastStatus)
+      return;
+    lastStatus = text;
+    parent.postMessage({ pluginMessage: { source: "figma-bridge", type: "status", text, error } }, "*");
+  }
+  function connect() {
+    console.log(`[figma-bridge] dialing ${RELAY_URL}`);
+    try {
+      ws = new WebSocket(RELAY_URL);
+    } catch (err) {
+      console.log(`[figma-bridge] dial failed: ${err}`);
+      setStatus("figma-bridge blocked: " + (err instanceof Error ? err.message : String(err)), true);
+      scheduleReconnect();
+      return;
+    }
+    ws.onopen = () => {
+      backoff = 500;
+      console.log("[figma-bridge] relay connected");
+      setStatus("figma-bridge connected");
+    };
+    ws.onmessage = (event) => {
+      let msg;
+      try {
+        msg = JSON.parse(event.data);
+      } catch {
+        return;
+      }
+      if (typeof msg.id !== "number" || typeof msg.method !== "string")
+        return;
+      parent.postMessage({
+        pluginMessage: {
+          source: "figma-bridge",
+          type: "request",
+          id: msg.id,
+          method: msg.method,
+          params: msg.params ?? {}
+        }
+      }, "*");
+    };
+    ws.onclose = (event) => {
+      ws = null;
+      if (event.code === REPLACED_CODE) {
+        setStatus("figma-bridge moved to another Figma window");
+        return;
+      }
+      console.log("[figma-bridge] relay closed the socket, retrying");
+      setStatus("figma-bridge relay unreachable, retrying…", true);
+      scheduleReconnect();
+    };
+    ws.onerror = () => {
+      try {
+        ws?.close();
+      } catch {}
+    };
+  }
+  function scheduleReconnect() {
+    const wait = backoff;
+    backoff = Math.min(backoff * 2, MAX_BACKOFF_MS);
+    setTimeout(connect, wait);
+  }
+  window.onmessage = (event) => {
+    const d = event.data && event.data.pluginMessage;
+    if (!d || d.source !== "figma-bridge")
+      return;
+    if (d.type === "response") {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ id: d.id, ok: d.ok, result: d.result, error: d.error }));
+      }
+    } else if (d.type === "event") {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "event", name: d.name, nodes: d.nodes }));
+      }
+    }
+  };
+  connect();
+})();
+</script>
 </body>
 </html>
