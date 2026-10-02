@@ -18,7 +18,7 @@ send({
   jsonrpc: "2.0",
   id: 3,
   method: "tools/call",
-  params: { name: "execute", arguments: { code: "1 + 1" } },
+  params: { name: "get_guide", arguments: {} },
 });
 proc.stdin.end();
 
@@ -48,7 +48,7 @@ for (const line of lines) {
   if (msg.id === 2) {
     console.log("tools:", msg.result.tools.map((t: any) => t.name).join(" "));
   } else if (msg.id === 3) {
-    console.log("execute 1+1:", msg.result.content[0].text);
+    console.log("get_guide:", msg.result.content[0].text.slice(0, 80) + "...");
   } else {
     console.log("initialize:", JSON.stringify(msg).slice(0, 300));
   }

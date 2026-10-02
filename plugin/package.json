@@ -8,5 +8,9 @@
   "devDependencies": {
     "@figma/plugin-typings": "latest",
     "typescript": "^7.0.2"
+  },
+  "dependencies": {
+    "remeda": "^2.50.0",
+    "zod": "^4.6.5"
   }
 }

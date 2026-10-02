@@ -16,9 +16,23 @@ let backoff = 500;
 let lastStatus = "";
 
 function setStatus(text: string, error = false) {
+  const dot = document.getElementById("dot");
+  const label = document.getElementById("text");
+  if (dot) dot.className = error ? "err" : ws && ws.readyState === WebSocket.OPEN ? "ok" : "";
+  if (label) label.textContent = text.replace(/^figma-bridge /, "");
   if (text === lastStatus) return;
   lastStatus = text;
-  parent.postMessage({ pluginMessage: { source: "figma-bridge", type: "status", text, error } }, "*");
+  if (error) parent.postMessage({ pluginMessage: { source: "figma-bridge", type: "status", text, error } }, "*");
+}
+
+function setLast(method: string) {
+  const el = document.getElementById("last");
+  if (!el) return;
+  const t = new Date();
+  const hh = String(t.getHours()).padStart(2, "0");
+  const mm = String(t.getMinutes()).padStart(2, "0");
+  const ss = String(t.getSeconds()).padStart(2, "0");
+  el.textContent = `· ${method} ${hh}:${mm}:${ss}`;
 }
 
 function connect() {
@@ -36,6 +50,8 @@ function connect() {
     backoff = 500;
     console.log("[figma-bridge] relay connected");
     setStatus("figma-bridge connected");
+    const dot = document.getElementById("dot");
+    if (dot) dot.className = "ok";
   };
 
   ws.onmessage = (event) => {
@@ -46,6 +62,7 @@ function connect() {
       return;
     }
     if (typeof msg.id !== "number" || typeof msg.method !== "string") return;
+    setLast(msg.method);
     parent.postMessage(
       {
         pluginMessage: {

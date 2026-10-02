@@ -1,5 +1,17 @@
 <html>
+<head>
+<style>
+  body { margin: 0; font: 11px/1 Inter, system-ui, sans-serif; color: var(--figma-color-text, #333); background: var(--figma-color-bg, #fff); overflow: hidden; }
+  #bar { display: flex; align-items: center; gap: 8px; height: 40px; padding: 0 12px; white-space: nowrap; }
+  #dot { width: 8px; height: 8px; border-radius: 50%; background: #999; flex: none; }
+  #dot.ok { background: #1bc47d; }
+  #dot.err { background: #f24822; }
+  #text { overflow: hidden; text-overflow: ellipsis; }
+  #last { color: var(--figma-color-text-secondary, #888); overflow: hidden; text-overflow: ellipsis; }
+</style>
+</head>
 <body>
+<div id="bar"><span id="dot"></span><span id="text">figma-bridge</span><span id="last"></span></div>
 <script>
 (() => {
   // src/ui.ts
@@ -10,10 +22,27 @@
   var backoff = 500;
   var lastStatus = "";
   function setStatus(text, error = false) {
+    const dot = document.getElementById("dot");
+    const label = document.getElementById("text");
+    if (dot)
+      dot.className = error ? "err" : ws && ws.readyState === WebSocket.OPEN ? "ok" : "";
+    if (label)
+      label.textContent = text.replace(/^figma-bridge /, "");
     if (text === lastStatus)
       return;
     lastStatus = text;
-    parent.postMessage({ pluginMessage: { source: "figma-bridge", type: "status", text, error } }, "*");
+    if (error)
+      parent.postMessage({ pluginMessage: { source: "figma-bridge", type: "status", text, error } }, "*");
+  }
+  function setLast(method) {
+    const el = document.getElementById("last");
+    if (!el)
+      return;
+    const t = new Date;
+    const hh = String(t.getHours()).padStart(2, "0");
+    const mm = String(t.getMinutes()).padStart(2, "0");
+    const ss = String(t.getSeconds()).padStart(2, "0");
+    el.textContent = `· ${method} ${hh}:${mm}:${ss}`;
   }
   function connect() {
     console.log(`[figma-bridge] dialing ${RELAY_URL}`);
@@ -29,6 +58,9 @@
       backoff = 500;
       console.log("[figma-bridge] relay connected");
       setStatus("figma-bridge connected");
+      const dot = document.getElementById("dot");
+      if (dot)
+        dot.className = "ok";
     };
     ws.onmessage = (event) => {
       let msg;
@@ -39,6 +71,7 @@
       }
       if (typeof msg.id !== "number" || typeof msg.method !== "string")
         return;
+      setLast(msg.method);
       parent.postMessage({
         pluginMessage: {
           source: "figma-bridge",
