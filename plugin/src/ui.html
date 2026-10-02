@@ -1,5 +1,17 @@
 <html>
+<head>
+<style>
+  body { margin: 0; font: 11px/1 Inter, system-ui, sans-serif; color: var(--figma-color-text, #333); background: var(--figma-color-bg, #fff); overflow: hidden; }
+  #bar { display: flex; align-items: center; gap: 8px; height: 40px; padding: 0 12px; white-space: nowrap; }
+  #dot { width: 8px; height: 8px; border-radius: 50%; background: #999; flex: none; }
+  #dot.ok { background: #1bc47d; }
+  #dot.err { background: #f24822; }
+  #text { overflow: hidden; text-overflow: ellipsis; }
+  #last { color: var(--figma-color-text-secondary, #888); overflow: hidden; text-overflow: ellipsis; }
+</style>
+</head>
 <body>
+<div id="bar"><span id="dot"></span><span id="text">figma-bridge</span><span id="last"></span></div>
 <script src="ui.js"></script>
 </body>
 </html>

@@ -102,8 +102,10 @@ Restart the host after adding the server.
 ### 4. Connect
 
 1. In Figma, open the file you want to work on.
-2. Run **Plugins > Development > figma-bridge**. Its window shows whether it is
-   connected to the relay. Leave it open while the agent works.
+2. Run **Plugins > Development > figma-bridge**. A small strip appears with a
+   green dot when it is connected to the relay and the time of the last call.
+   Drag it into a corner and leave it open while the agent works. A visible
+   window also keeps Figma from showing its "Running figma-bridge" pill.
 3. Ask your agent something like "take a screenshot of the current Figma page".
 
 If the relay is not running yet, the plugin keeps retrying and connects as soon as
@@ -128,6 +130,7 @@ open, the same command returns `2` for `execute 1+1`.
 | `execute` | Run any Plugin API code. `figma` is in scope and the last expression is returned as JSON. |
 | `get_tree` | The node tree under a node (default: the document): ids, names, types, layout, text, and sizes, capped by `max_depth`. |
 | `get_node` | Full detail for one node: fills, strokes, effects, text style, constraints, transform, children. |
+| `get_layout` | A 2D ASCII map of one frame with px rulers, the columns its children share, and overflow, overlap, and near-miss alignment issues. Read it before and after moving nodes. |
 | `get_screenshot` | Render the canvas or one node to an image. This is how the agent sees its work. |
 | `notify` | Show a toast in Figma so you see what the agent did. |
 | `create_frame` | Create a frame, with optional auto layout (`layoutMode`, `itemSpacing`, padding). |
